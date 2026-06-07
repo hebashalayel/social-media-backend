@@ -9,7 +9,7 @@ const {
   getUserById,
   getUsers
 } = require('../controllers/authController');
-const { authRateLimiter, registerRateLimiter } = require('../middleware/rateLimiter');
+const { authRateLimiter, registerRateLimiter, tenantRateLimiter } = require('../middleware/rateLimiter');
 
 const { protect } = require('../middleware/auth');
 const {
@@ -22,8 +22,8 @@ const {
 const router = express.Router();
 
 // Public routes
-router.post('/register', registerRateLimiter, validateUserRegistration, register);
-router.post('/login', authRateLimiter, validateUserLogin, login);
+router.post('/register', tenantRateLimiter, registerRateLimiter, validateUserRegistration, register);
+router.post('/login', tenantRateLimiter, authRateLimiter, validateUserLogin, login);
 
 // Protected routes
 router.use(protect); // All routes below require authentication
