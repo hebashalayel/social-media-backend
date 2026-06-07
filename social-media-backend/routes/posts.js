@@ -10,8 +10,16 @@ const {
   sharePost,
   getUserPosts
 } = require('../controllers/postController');
-const { postRateLimiter, likeRateLimiter } = require('../middleware/rateLimiter');
+const { 
+  userRateLimiter,
+  writeRateLimiter,
+  searchRateLimiter,
+  sensitiveEndpointLimiter 
+} = require('../middleware/rateLimiter');
+const { cacheMiddleware, invalidateCache } = require('../middleware/cacheMiddleware');
 const { protect, optionalAuth } = require('../middleware/auth');
+const authorizeResource = require('../middleware/authorize');
+const Post = require('../models/Post');
 const {
   validatePostCreation,
   validatePostUpdate,
@@ -21,21 +29,73 @@ const {
 
 const router = express.Router();
 
-// Public routes (with optional auth for better UX)
-router.get('/popular', optionalAuth, validatePagination, getPopularPosts);
+// Helper to fetch post for authorization
+const fetchPost = async (id) => await Post.findById(id);
 
-// Protected routes
+// --- Public Routes ---
+router.get('/popular', 
+  optionalAuth, 
+  searchRateLimiter, // Layer 5: Search
+  cacheMiddleware(300), // Cache for 5 minutes
+  validatePagination, 
+  getPopularPosts
+);
+
+// --- Protected Routes ---
 router.use(protect);
+router.use(userRateLimiter); // Layer 2: User-Based
 
-router.post('/', postRateLimiter, validatePostCreation, createPost);  // ← معدل
-router.get('/', validatePagination, getPosts);
-router.get('/user/:userId', validateObjectId('userId'), validatePagination, getUserPosts);
+// GET Posts with Caching
+router.get('/', 
+  searchRateLimiter, 
+  cacheMiddleware(60), // Cache for 1 minute
+  validatePagination, 
+  getPosts
+);
 
-router.get('/:id', validateObjectId('id'), getPost);
-router.put('/:id', validateObjectId('id'), validatePostUpdate, updatePost);
-router.delete('/:id', validateObjectId('id'), deletePost);
+router.post('/', 
+  writeRateLimiter, // Layer 4: Write-Based
+  invalidateCache('/api/posts'), // Invalidate cache on new post
+  validatePostCreation, 
+  createPost
+);
 
-router.post('/:id/like', likeRateLimiter, validateObjectId('id'), likePost);  // ← معدل
-router.post('/:id/share', validateObjectId('id'), sharePost);
+router.get('/user/:userId', 
+  validateObjectId('userId'), 
+  cacheMiddleware(60),
+  validatePagination, 
+  getUserPosts
+);
+
+router.get('/:id', 
+  validateObjectId('id'), 
+  cacheMiddleware(300),
+  getPost
+);
+
+// Resource-Based Authorization + Write Limiting + Invalidation
+router.put('/:id', 
+  validateObjectId('id'), 
+  writeRateLimiter,
+  authorizeResource(fetchPost, 'user'), 
+  invalidateCache('/api/posts'),
+  validatePostUpdate, 
+  updatePost
+);
+
+router.delete('/:id', 
+  validateObjectId('id'), 
+  sensitiveEndpointLimiter, // Layer 6: Sensitive
+  authorizeResource(fetchPost, 'user'), 
+  invalidateCache('/api/posts'),
+  deletePost
+);
+
+router.post('/:id/like', 
+  writeRateLimiter,
+  invalidateCache('/api/posts'), // Simple invalidation for all posts cache
+  validateObjectId('id'), 
+  likePost
+);
 
 module.exports = router;
