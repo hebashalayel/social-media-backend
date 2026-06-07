@@ -10,8 +10,9 @@ const {
   sharePost,
   getUserPosts
 } = require('../controllers/postController');
-const { 
+const {
   userRateLimiter,
+  tenantRateLimiter,
   writeRateLimiter,
   searchRateLimiter,
   sensitiveEndpointLimiter 
@@ -44,6 +45,7 @@ router.get('/popular',
 // --- Protected Routes ---
 router.use(protect);
 router.use(userRateLimiter); // Layer 2: User-Based
+router.use(tenantRateLimiter); // Layer 3: Tenant-Based
 
 // GET Posts with Caching
 router.get('/', 
