@@ -1,12 +1,14 @@
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
+const compression = require('compression');
 const dotenv = require('dotenv');
 const correlationId = require('./middleware/correlationId');
 const requestLogger = require('./middleware/requestLogger');
+const { requestContextMiddleware } = require('./middleware/requestContext');
 const { globalRateLimiter } = require('./middleware/rateLimiter');
 const { errorHandler } = require('./middleware/errorHandler');
-const { connectMongoDB, connectRedis, getRedisClient } = require('./config/database');  // ← معدل
+const { connectMongoDB, connectRedis } = require('./config/database');
 const routes = require('./routes');
 
 // Load environment variables
@@ -15,40 +17,61 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 1. Core middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
-// 2. Custom middleware
-app.use(correlationId);
-app.use(requestLogger);
-
-// 3. Security middleware
+// 1. Security Headers (Helmet) - Advanced Config
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
+      scriptSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "https:"],
+      upgradeInsecureRequests: [],
     },
   },
+  referrerPolicy: { policy: 'same-origin' },
+  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
 }));
 
+// 2. CORS - Advanced Config
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Tenant-ID'],
+  exposedHeaders: ['X-Request-Id', 'ETag'],
+  maxAge: 600, // Cache preflight requests for 10 minutes
 }));
 
-// 4. Global rate limiting
+// 3. Performance & Optimization
+app.use(compression()); // Gzip compression
+app.set('etag', 'strong'); // Enable Strong ETag for caching validation
+
+// 4. Request Body Size Limits (Security)
+app.use(express.json({ limit: '10kb' })); // Limit JSON body to 10kb
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+
+// 5. Context & Observability
+app.use(correlationId);
+app.use(requestContextMiddleware); // AsyncLocalStorage
+app.use(requestLogger);
+
+// 6. Global Rate Limiting
 app.use(globalRateLimiter);
 
-// 5. Routes
+// 7. Cache-Control Middleware (General)
+app.use((req, res, next) => {
+  if (req.method === 'GET') {
+    res.set('Cache-Control', 'public, max-age=60'); // Default cache for 1 minute
+  } else {
+    res.set('Cache-Control', 'no-store'); // No cache for state-changing requests
+  }
+  next();
+});
+
+// 8. Routes
 app.use('/api', routes);
 
-// 6. 404 handler (fixed: no '*' wildcard)
+// 9. 404 handler
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -61,7 +84,7 @@ app.use((req, res) => {
   });
 });
 
-// 7. Centralized error handler
+// 10. Centralized error handler
 app.use(errorHandler);
 
 // ========== START SERVER ==========
