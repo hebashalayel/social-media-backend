@@ -1,11 +1,12 @@
 const winston = require('winston');
+const { getContextItem } = require('./requestContext');
 
 // Configure Winston logger with JSON format
 const logger = winston.createLogger({
   level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
   format: winston.format.combine(
     winston.format.timestamp(),
-    winston.format.prettyPrint()
+    winston.format.json() // Changed to pure JSON for better structured logging
   ),
   transports: [
     new winston.transports.Console(),
@@ -16,15 +17,15 @@ const logger = winston.createLogger({
 
 /**
  * Middleware to log request lifecycle (Ingress and Egress)
- * Implements Lifecycle Interception as per theoretical research
+ * Now utilizes AsyncLocalStorage context for shared data
  */
 const requestLogger = (req, res, next) => {
-  const startTime = Date.now();
+  const requestId = getContextItem('requestId') || req.id;
   
-  // INGRESS LOG - Request enters the server
+  // INGRESS LOG
   logger.info({
     type: 'INGRESS',
-    requestId: req.id,
+    requestId,
     method: req.method,
     path: req.path,
     ip: req.ip,
@@ -32,16 +33,10 @@ const requestLogger = (req, res, next) => {
     timestamp: new Date().toISOString()
   });
   
-  // Capture response body (for error tracking only)
-  let originalJson = res.json;
-  res.json = function(body) {
-    res.body = body;
-    return originalJson.call(this, body);
-  };
-  
-  // EGRESS LOG - Response is sent
+  // EGRESS LOG
   res.on('finish', () => {
-    const responseTime = Date.now() - startTime;
+    const startTime = getContextItem('startTime');
+    const responseTime = startTime ? Date.now() - startTime : 'unknown';
     
     const logLevel = res.statusCode >= 500 ? 'error' : 
                      res.statusCode >= 400 ? 'warn' : 'info';
@@ -49,11 +44,13 @@ const requestLogger = (req, res, next) => {
     logger.log({
       level: logLevel,
       type: 'EGRESS',
-      requestId: req.id,
+      requestId,
       method: req.method,
       path: req.path,
       statusCode: res.statusCode,
       responseTime: `${responseTime}ms`,
+      etag: res.get('ETag'), // Log ETag for caching validation
+      cacheControl: res.get('Cache-Control'),
       timestamp: new Date().toISOString()
     });
   });
